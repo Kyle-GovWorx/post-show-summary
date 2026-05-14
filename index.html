@@ -83,6 +83,12 @@
       <h2>Conference Details</h2>
       <div class="grid">
         <div class="field full">
+          <label for="submittedBy">Submitted by
+            <span class="hint">GovWorx AE or rep filling out this form</span>
+          </label>
+          <input type="text" id="submittedBy" name="submittedBy" placeholder="Your name" />
+        </div>
+        <div class="field full">
           <label for="conferenceName">Conference name</label>
           <input type="text" id="conferenceName" name="conferenceName" />
         </div>
@@ -417,6 +423,7 @@
 
     // --- Conference Details ---
     renderSection('Conference Details', [
+      ['Submitted by',      val('submittedBy')],
       ['Conference name',   val('conferenceName')],
       ['Dates',             dates],
       ['Location',          val('location')],
