@@ -7,7 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
   :root{
     --bg:#F7F6F2;
@@ -54,18 +55,6 @@
   .recommend label{display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-weight:500}
   .recommend input{accent-color:var(--primary)}
   .footnote{color:var(--muted);font-size:12px;margin-top:8px}
-
-  /* PDF render container — sits on-page so html2canvas can rasterize it, but invisible to the user.
-     Width tuned so 1px ≈ 0.2645mm fits inside a letter page (215.9mm) with 12mm margins. */
-  #pdf-stage{position:fixed;left:0;top:0;width:720px;background:#fff;color:#111;padding:32px;font-family:'Inter',Arial,sans-serif;font-size:12px;line-height:1.5;opacity:0;pointer-events:none;z-index:-1}
-  #pdf-stage h1{font-size:22px;margin:0 0 4px;color:#01696F}
-  #pdf-stage .sub{color:#666;font-size:11px;margin-bottom:20px}
-  #pdf-stage h2{font-size:14px;margin:22px 0 8px;color:#01696F;border-bottom:1px solid #D4D1CA;padding-bottom:4px}
-  #pdf-stage table{width:100%;border-collapse:collapse;margin-bottom:6px}
-  #pdf-stage td{border:1px solid #D4D1CA;padding:8px 10px;vertical-align:top;font-size:12px}
-  #pdf-stage td.k{width:38%;background:#F7F6F2;font-weight:600;color:#28251D}
-  #pdf-stage td.v{white-space:pre-wrap;color:#28251D}
-  #pdf-stage .stars-pdf{color:#D19900;letter-spacing:2px}
 
   @media (max-width:680px){
     .grid,.grid.cols-3,.ratings{grid-template-columns:1fr}
@@ -247,9 +236,6 @@
   </form>
 </div>
 
-<!-- Hidden PDF stage -->
-<div id="pdf-stage" aria-hidden="true"></div>
-
 <script>
 (function(){
   // Build star widgets
@@ -278,6 +264,7 @@
     }
   }
 
+  // --- helpers ---------------------------------------------------------------
   function formatDate(d){
     if(!d) return '';
     const parts = d.split('-');
@@ -285,7 +272,7 @@
     return parts[1]+'/'+parts[2]+'/'+parts[0];
   }
   function dateRange(a,b){
-    if(a && b) return formatDate(a)+' - '+formatDate(b);
+    if(a && b) return formatDate(a)+' \u2013 '+formatDate(b);
     return formatDate(a) || formatDate(b) || '';
   }
   function money(v){
@@ -293,121 +280,287 @@
     const n = Number(v); if(isNaN(n)) return v;
     return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   }
-  function stars(n){
+  function ratingNumber(n){
     n = parseInt(n,10)||0;
-    if(!n) return '<span style="color:#999">Not rated</span>';
-    return '<span class="stars-pdf">'+'\u2605'.repeat(n)+'<span style="color:#ddd">'+'\u2605'.repeat(5-n)+'</span></span> <span style="color:#666">('+n+'/5)</span>';
+    return n ? (n + ' / 5') : 'Not rated';
   }
-  function esc(s){
-    return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  // Draw 5 star polygons inside a PDF cell at a given baseline
+  function drawStarsInCell(doc, n, x, y, size){
+    n = parseInt(n,10)||0;
+    const C_STAR = [209, 153, 0];
+    const C_EMPTY = [210, 207, 200];
+    const gap = size * 0.4;
+    for(let i = 0; i < 5; i++){
+      const cx = x + (size/2) + i * (size + gap);
+      const filled = i < n;
+      const color = filled ? C_STAR : C_EMPTY;
+      // 5-point star polygon
+      const pts = [];
+      for(let k = 0; k < 10; k++){
+        const r = (k % 2 === 0) ? size/2 : size/4.5;
+        const ang = -Math.PI/2 + (k * Math.PI / 5);
+        pts.push([cx + Math.cos(ang)*r, y + Math.sin(ang)*r]);
+      }
+      doc.setFillColor(...color);
+      doc.setDrawColor(...color);
+      const lines = [];
+      for(let k = 1; k < pts.length; k++){
+        lines.push([pts[k][0]-pts[k-1][0], pts[k][1]-pts[k-1][1]]);
+      }
+      doc.lines(lines, pts[0][0], pts[0][1], [1,1], 'F', true);
+    }
   }
-  function val(id){ const el = document.getElementById(id); return el ? el.value : ''; }
+  function val(id){ const el = document.getElementById(id); return el ? el.value.trim() : ''; }
   function radio(name){
     const r = document.querySelector('input[name="'+name+'"]:checked');
     return r ? r.value : '';
   }
-  function row(k,v){
-    return '<tr><td class="k">'+esc(k)+'</td><td class="v">'+(v||'<span style="color:#999">-</span>')+'</td></tr>';
-  }
 
-  function buildPdfHtml(){
-    const conf = esc(val('conferenceName')) || 'Untitled Conference';
-    const dates = esc(dateRange(val('startDate'), val('endDate')));
+  // --- PDF generation via jsPDF + autoTable ---------------------------------
+  function generatePdf(){
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'pt', format:'letter', orientation:'portrait' });
+
+    const PAGE_W = doc.internal.pageSize.getWidth();   // 612pt
+    const PAGE_H = doc.internal.pageSize.getHeight();  // 792pt
+    const MARGIN_X = 48;
+    const MARGIN_TOP = 56;
+    const MARGIN_BOTTOM = 56;
+    const CONTENT_W = PAGE_W - (MARGIN_X * 2);
+
+    // Colors
+    const C_PRIMARY = [1, 105, 111];     // #01696F
+    const C_TEXT    = [40, 37, 29];      // #28251D
+    const C_MUTED   = [122, 121, 116];   // #7A7974
+    const C_RULE    = [212, 209, 202];   // #D4D1CA
+    const C_KEY_BG  = [247, 246, 242];   // #F7F6F2
+    const C_PLACEHOLDER = [186, 185, 180];
+    const C_STAR    = [209, 153, 0];     // #D19900
+
+    // Header
+    const confName = val('conferenceName') || 'Untitled Conference';
+    const dates = dateRange(val('startDate'), val('endDate'));
     const today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
 
-    return `
-      <h1>Post-Show Summary Report</h1>
-      <div class="sub">${conf}${dates?' &middot; '+dates:''} &middot; Generated ${today}</div>
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(22);
+    doc.setTextColor(...C_PRIMARY);
+    doc.text('Post-Show Summary Report', MARGIN_X, MARGIN_TOP);
 
-      <h2>Conference Details</h2>
-      <table>
-        ${row('Conference name', esc(val('conferenceName')))}
-        ${row('Dates', dates)}
-        ${row('Location', esc(val('location')))}
-        ${row('Staff attending', esc(val('staffAttending')))}
-        ${row('Conference website', esc(val('website')))}
-        ${row('Show cost', esc(money(val('showCost'))))}
-      </table>
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(10);
+    doc.setTextColor(...C_MUTED);
+    const subParts = [confName];
+    if(dates) subParts.push(dates);
+    subParts.push('Generated ' + today);
+    doc.text(subParts.join('  \u00b7  '), MARGIN_X, MARGIN_TOP + 18);
 
-      <h2>Show Details</h2>
-      <table>
-        ${row('Number of leads', esc(val('numLeads')))}
-        ${row('Number of customers', esc(val('numCustomers')))}
-        ${row('Approximate booth visitors', esc(val('boothVisitors')))}
-        ${row('Demos completed', esc(val('demosCompleted')))}
-        ${row('Competitors that attended', esc(val('competitors')))}
-        ${row('Main product interest', esc(val('mainProductInterest')))}
-        ${row('Competitive issues / industry rumors', esc(val('competitiveIssues')))}
-        ${row('Condition of booth/graphics/supplies', esc(val('boothCondition')))}
-      </table>
+    // Thin rule under header
+    doc.setDrawColor(...C_RULE);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN_X, MARGIN_TOP + 28, PAGE_W - MARGIN_X, MARGIN_TOP + 28);
 
-      <h2>Marketing</h2>
-      <table>
-        ${row('News release information', esc(val('newsRelease')))}
-      </table>
+    let cursorY = MARGIN_TOP + 48;
 
-      <h2>Notes</h2>
-      <table>
-        ${row('Raffle winner', esc(val('raffleWinner')))}
-        ${row('Agencies', esc(val('agencies')))}
-        ${row('Leads notes', esc(val('leadsNotes')))}
-        ${row('Customers notes', esc(val('customersNotes')))}
-        ${row('Show notes', esc(val('showNotes')))}
-        ${row('Show recap', esc(val('showRecap')))}
-      </table>
+    // Section renderer using autoTable
+    function renderSection(title, rows, opts){
+      opts = opts || {};
+      // Section heading — reserve room so it never lands as a widow at the bottom
+      const headingSpace = 38;
+      if(cursorY + headingSpace + 40 > PAGE_H - MARGIN_BOTTOM){
+        doc.addPage();
+        cursorY = MARGIN_TOP;
+      }
 
-      <h2>Ratings</h2>
-      <table>
-        ${row('Overall rating', stars(val('overallRating')))}
-        ${row('Leads rating', stars(val('leadsRating')))}
-        ${row('Customer contact rating', stars(val('customerRating')))}
-        ${row('Recommend attending next year', esc(radio('recommend')))}
-      </table>
-    `;
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...C_PRIMARY);
+      doc.text(title, MARGIN_X, cursorY);
+      doc.setDrawColor(...C_RULE);
+      doc.setLineWidth(0.4);
+      doc.line(MARGIN_X, cursorY + 6, PAGE_W - MARGIN_X, cursorY + 6);
+      cursorY += 14;
+
+      const body = rows.map(([k,v]) => {
+        const isEmpty = !v || v === '';
+        return [
+          { content: k, styles: { fontStyle:'bold', textColor: C_TEXT, fillColor: C_KEY_BG } },
+          { content: isEmpty ? '\u2014' : String(v), styles: { textColor: isEmpty ? C_PLACEHOLDER : C_TEXT } }
+        ];
+      });
+
+      doc.autoTable({
+        startY: cursorY,
+        margin: { left: MARGIN_X, right: MARGIN_X, top: MARGIN_TOP, bottom: MARGIN_BOTTOM },
+        tableWidth: CONTENT_W,
+        body,
+        theme: 'grid',
+        styles: {
+          font: 'helvetica',
+          fontSize: 10,
+          cellPadding: { top:7, right:9, bottom:7, left:9 },
+          lineColor: C_RULE,
+          lineWidth: 0.4,
+          valign: 'top',
+          overflow: 'linebreak'
+        },
+        columnStyles: {
+          0: { cellWidth: CONTENT_W * 0.34 },
+          1: { cellWidth: CONTENT_W * 0.66 }
+        },
+        rowPageBreak: 'auto',  // split long-text rows cleanly across pages instead of orphaning whitespace
+        didDrawCell: opts.didDrawCell
+      });
+
+      cursorY = doc.lastAutoTable.finalY + 18;
+    }
+
+    // --- Conference Details ---
+    renderSection('Conference Details', [
+      ['Conference name',   val('conferenceName')],
+      ['Dates',             dates],
+      ['Location',          val('location')],
+      ['Staff attending',   val('staffAttending')],
+      ['Conference website',val('website')],
+      ['Show cost',         money(val('showCost'))]
+    ]);
+
+    // --- Show Details ---
+    renderSection('Show Details', [
+      ['Number of leads',                     val('numLeads')],
+      ['Number of customers',                 val('numCustomers')],
+      ['Approximate booth visitors',          val('boothVisitors')],
+      ['Demos completed',                     val('demosCompleted')],
+      ['Competitors that attended',           val('competitors')],
+      ['Main product interest',               val('mainProductInterest')],
+      ['Competitive issues / industry rumors',val('competitiveIssues')],
+      ['Condition of booth, graphics, supplies', val('boothCondition')]
+    ]);
+
+    // --- Marketing ---
+    renderSection('Marketing', [
+      ['News release information', val('newsRelease')]
+    ]);
+
+    // --- Notes ---
+    renderSection('Notes', [
+      ['Raffle winner',   val('raffleWinner')],
+      ['Agencies',        val('agencies')],
+      ['Leads notes',     val('leadsNotes')],
+      ['Customers notes', val('customersNotes')],
+      ['Show notes',      val('showNotes')],
+      ['Show recap',      val('showRecap')]
+    ]);
+
+    // --- Ratings --- (custom drawing for star glyphs in color)
+    const ratingRows = [
+      ['Overall rating',          val('overallRating')],
+      ['Leads rating',            val('leadsRating')],
+      ['Customer contact rating', val('customerRating')],
+      ['Recommend attending next year', radio('recommend')]
+    ];
+
+    // Heading
+    if(cursorY + 40 > PAGE_H - MARGIN_BOTTOM){ doc.addPage(); cursorY = MARGIN_TOP; }
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...C_PRIMARY);
+    doc.text('Ratings', MARGIN_X, cursorY);
+    doc.setDrawColor(...C_RULE);
+    doc.setLineWidth(0.4);
+    doc.line(MARGIN_X, cursorY + 6, PAGE_W - MARGIN_X, cursorY + 6);
+    cursorY += 14;
+
+    doc.autoTable({
+      startY: cursorY,
+      margin: { left: MARGIN_X, right: MARGIN_X, top: MARGIN_TOP, bottom: MARGIN_BOTTOM },
+      tableWidth: CONTENT_W,
+      body: ratingRows.map(([label, v], idx) => {
+        const isRating = idx < 3;
+        const isEmpty = !v || (isRating && (parseInt(v,10)||0) === 0);
+        let display = '';
+        if(isRating){
+          // Star icons + number text are drawn via didDrawCell. Keep content blank.
+          display = isEmpty ? 'Not rated' : '';
+        } else {
+          display = isEmpty ? '\u2014' : String(v);
+        }
+        return [
+          { content: label, styles: { fontStyle:'bold', textColor: C_TEXT, fillColor: C_KEY_BG } },
+          {
+            content: display,
+            _rating: isRating ? (parseInt(v,10)||0) : null,
+            styles: {
+              textColor: isEmpty ? C_PLACEHOLDER : C_TEXT,
+              fontStyle: 'normal'
+            }
+          }
+        ];
+      }),
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 10,
+        cellPadding: { top:8, right:9, bottom:8, left:9 },
+        lineColor: C_RULE,
+        lineWidth: 0.4,
+        valign: 'middle',
+        overflow: 'linebreak'
+      },
+      columnStyles: {
+        0: { cellWidth: CONTENT_W * 0.34 },
+        1: { cellWidth: CONTENT_W * 0.66 }
+      },
+      rowPageBreak: 'avoid',
+      didDrawCell: function(data){
+        // Draw star icons + number text inside the value column for rating rows
+        if(data.section !== 'body' || data.column.index !== 1) return;
+        const cell = data.cell;
+        const raw = cell.raw;
+        if(!raw || raw._rating == null) return;
+        const n = raw._rating;
+        if(n === 0) return; // 'Not rated' text label already drawn by autoTable
+        const starSize = 10;
+        const starX = cell.x + 9;
+        const starY = cell.y + cell.height/2;
+        drawStarsInCell(doc, n, starX, starY, starSize);
+        // Number text positioned to the right of all 5 stars
+        const totalStarsWidth = 5 * starSize + 4 * (starSize * 0.4);
+        const numX = starX + totalStarsWidth + 10;
+        doc.setFont('helvetica','bold');
+        doc.setFontSize(10);
+        doc.setTextColor(40,37,29);
+        doc.text(n + ' / 5', numX, starY + 3);
+      }
+    });
+
+    // Footer with page numbers
+    const pageCount = doc.internal.getNumberOfPages();
+    for(let p = 1; p <= pageCount; p++){
+      doc.setPage(p);
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(9);
+      doc.setTextColor(...C_MUTED);
+      doc.text('Post-Show Summary  \u00b7  ' + confName, MARGIN_X, PAGE_H - 24);
+      const right = 'Page ' + p + ' of ' + pageCount;
+      const rw = doc.getTextWidth(right);
+      doc.text(right, PAGE_W - MARGIN_X - rw, PAGE_H - 24);
+    }
+
+    const safeName = (confName || 'Post-Show-Summary').replace(/[^a-z0-9-_ ]/gi,'').replace(/\s+/g,'-') || 'Post-Show-Summary';
+    doc.save(safeName + '.pdf');
   }
 
-  document.getElementById('pdfBtn').addEventListener('click', async () => {
-    const stage = document.getElementById('pdf-stage');
-    stage.innerHTML = buildPdfHtml();
-    const confName = (val('conferenceName')||'Post-Show-Summary').trim().replace(/[^a-z0-9-_ ]/gi,'').replace(/\s+/g,'-');
-    const filename = confName + '.pdf';
-
-    const opts = {
-      margin:[12,12,14,12],
-      filename,
-      image:{type:'jpeg',quality:0.98},
-      html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},
-      jsPDF:{unit:'mm',format:'letter',orientation:'portrait'},
-      pagebreak:{mode:['css','legacy']}
-    };
-
+  document.getElementById('pdfBtn').addEventListener('click', () => {
     const btn = document.getElementById('pdfBtn');
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = 'Building PDF...';
-
-    // Cover the stage with a full-screen overlay so the flash is invisible to the user
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(247,246,242,0.92);z-index:9998;display:flex;align-items:center;justify-content:center;font:600 16px Inter,sans-serif;color:#01696F';
-    overlay.textContent = 'Building PDF...';
-    document.body.appendChild(overlay);
-
-    // Temporarily make the stage capturable. html2canvas needs the element to have a real
-    // flow-based height — position:fixed reports 0 to its clone-doc renderer. We switch to
-    // static positioning during capture (overlay hides the flash from the user).
-    const prevStyle = stage.getAttribute('style') || '';
-    stage.style.cssText = 'width:720px;background:#fff;color:#111;padding:32px;font-family:Inter,Arial,sans-serif;font-size:12px;line-height:1.5;position:static;opacity:1';
-    window.scrollTo(0,0);
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-    try {
-      await html2pdf().set(opts).from(stage).save();
-    } catch(e){
-      alert('Sorry, the PDF export failed. ' + e.message);
-    } finally {
-      stage.setAttribute('style', prevStyle);
-      overlay.remove();
-      btn.disabled = false; btn.textContent = orig;
-    }
+    // Defer one frame so the disabled state paints before the synchronous PDF work
+    requestAnimationFrame(() => {
+      try { generatePdf(); }
+      catch(e){ console.error(e); alert('Sorry, the PDF export failed. ' + e.message); }
+      finally { btn.disabled = false; btn.textContent = orig; }
+    });
   });
 
   document.getElementById('clearBtn').addEventListener('click', () => {
