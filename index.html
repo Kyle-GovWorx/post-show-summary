@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Post-Show Summary Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<style>
+  :root{
+    --bg:#F7F6F2;
+    --surface:#FFFFFF;
+    --border:#D4D1CA;
+    --text:#28251D;
+    --muted:#7A7974;
+    --primary:#01696F;
+    --primary-hover:#0C4E54;
+    --accent-soft:#E6F0F1;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,Segoe UI,sans-serif;font-size:15px;line-height:1.5}
+  .wrap{max-width:920px;margin:0 auto;padding:32px 24px 96px}
+  header.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+  header.page-head h1{font-size:30px;font-weight:700;margin:0;letter-spacing:-0.01em}
+  header.page-head p{margin:4px 0 0;color:var(--muted);font-size:14px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap}
+  button{font-family:inherit;font-size:14px;font-weight:600;border-radius:8px;padding:10px 16px;cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--text);transition:all .15s ease}
+  button:hover{border-color:var(--text)}
+  button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  button.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:20px}
+  .card h2{font-size:18px;font-weight:600;margin:0 0 16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field.full{grid-column:1/-1}
+  label{font-size:13px;font-weight:500;color:var(--text)}
+  label .hint{display:block;color:var(--muted);font-weight:400;font-size:12px;margin-top:2px}
+  input[type=text],input[type=date],input[type=number],input[type=url],textarea,select{
+    width:100%;font:inherit;color:var(--text);background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;transition:border-color .15s ease,box-shadow .15s ease
+  }
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--accent-soft)}
+  textarea{min-height:96px;resize:vertical;line-height:1.5}
+  textarea.tall{min-height:140px}
+  .ratings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .rating-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;gap:12px}
+  .rating-row .lbl{font-size:14px;font-weight:500}
+  .stars{display:flex;gap:4px}
+  .star{font-size:22px;line-height:1;color:#D4D1CA;cursor:pointer;user-select:none;transition:color .1s ease}
+  .star.on{color:#D19900}
+  .recommend{display:flex;gap:8px}
+  .recommend label{display:flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-weight:500}
+  .recommend input{accent-color:var(--primary)}
+  .footnote{color:var(--muted);font-size:12px;margin-top:8px}
+
+  /* PDF render container — sits on-page so html2canvas can rasterize it, but invisible to the user.
+     Width tuned so 1px ≈ 0.2645mm fits inside a letter page (215.9mm) with 12mm margins. */
+  #pdf-stage{position:fixed;left:0;top:0;width:720px;background:#fff;color:#111;padding:32px;font-family:'Inter',Arial,sans-serif;font-size:12px;line-height:1.5;opacity:0;pointer-events:none;z-index:-1}
+  #pdf-stage h1{font-size:22px;margin:0 0 4px;color:#01696F}
+  #pdf-stage .sub{color:#666;font-size:11px;margin-bottom:20px}
+  #pdf-stage h2{font-size:14px;margin:22px 0 8px;color:#01696F;border-bottom:1px solid #D4D1CA;padding-bottom:4px}
+  #pdf-stage table{width:100%;border-collapse:collapse;margin-bottom:6px}
+  #pdf-stage td{border:1px solid #D4D1CA;padding:8px 10px;vertical-align:top;font-size:12px}
+  #pdf-stage td.k{width:38%;background:#F7F6F2;font-weight:600;color:#28251D}
+  #pdf-stage td.v{white-space:pre-wrap;color:#28251D}
+  #pdf-stage .stars-pdf{color:#D19900;letter-spacing:2px}
+
+  @media (max-width:680px){
+    .grid,.grid.cols-3,.ratings{grid-template-columns:1fr}
+    .wrap{padding:20px 14px 80px}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="page-head">
+    <div>
+      <h1>Post-Show Summary Report</h1>
+      <p>Fill out the form, then export a clean PDF copy for the team.</p>
+    </div>
+    <div class="toolbar">
+      <button type="button" id="clearBtn">Clear form</button>
+      <button type="button" id="pdfBtn" class="primary">Export as PDF</button>
+    </div>
+  </header>
+
+  <form id="reportForm" autocomplete="off">
+
+    <!-- Conference Details -->
+    <section class="card">
+      <h2>Conference Details</h2>
+      <div class="grid">
+        <div class="field full">
+          <label for="conferenceName">Conference name</label>
+          <input type="text" id="conferenceName" name="conferenceName" />
+        </div>
+        <div class="field">
+          <label for="startDate">Start date</label>
+          <input type="date" id="startDate" name="startDate" />
+        </div>
+        <div class="field">
+          <label for="endDate">End date</label>
+          <input type="date" id="endDate" name="endDate" />
+        </div>
+        <div class="field">
+          <label for="location">Location</label>
+          <input type="text" id="location" name="location" placeholder="City, State" />
+        </div>
+        <div class="field">
+          <label for="website">Conference website</label>
+          <input type="url" id="website" name="website" placeholder="https://" />
+        </div>
+        <div class="field full">
+          <label for="staffAttending">Staff attending</label>
+          <input type="text" id="staffAttending" name="staffAttending" placeholder="Comma-separated names" />
+        </div>
+        <div class="field">
+          <label for="showCost">Show cost (USD)</label>
+          <input type="number" id="showCost" name="showCost" min="0" step="0.01" placeholder="0.00" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Show Details -->
+    <section class="card">
+      <h2>Show Details</h2>
+      <div class="grid cols-3">
+        <div class="field">
+          <label for="numLeads">Number of leads
+            <span class="hint">List specifics in Leads Notes below</span>
+          </label>
+          <input type="number" id="numLeads" name="numLeads" min="0" />
+        </div>
+        <div class="field">
+          <label for="numCustomers">Number of customers
+            <span class="hint">List specifics in Customers Notes below</span>
+          </label>
+          <input type="number" id="numCustomers" name="numCustomers" min="0" />
+        </div>
+        <div class="field">
+          <label for="boothVisitors">Approximate booth visitors</label>
+          <input type="number" id="boothVisitors" name="boothVisitors" min="0" />
+        </div>
+        <div class="field">
+          <label for="demosCompleted">Demos completed</label>
+          <input type="number" id="demosCompleted" name="demosCompleted" min="0" />
+        </div>
+        <div class="field" style="grid-column:span 2">
+          <label for="competitors">Competitors that attended</label>
+          <input type="text" id="competitors" name="competitors" />
+        </div>
+        <div class="field full">
+          <label for="mainProductInterest">Main product interest indicated at the show</label>
+          <textarea id="mainProductInterest" name="mainProductInterest"></textarea>
+        </div>
+        <div class="field full">
+          <label for="competitiveIssues">Competitive issues or industry rumors</label>
+          <textarea id="competitiveIssues" name="competitiveIssues"></textarea>
+        </div>
+        <div class="field full">
+          <label for="boothCondition">Condition of booth, graphics, supplies
+            <span class="hint">Anything needing replaced?</span>
+          </label>
+          <textarea id="boothCondition" name="boothCondition"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- Marketing -->
+    <section class="card">
+      <h2>Marketing</h2>
+      <div class="grid">
+        <div class="field full">
+          <label for="newsRelease">Information for a news release
+            <span class="hint">People at the show, main issues discussed, unique events or opportunities, etc.</span>
+          </label>
+          <textarea id="newsRelease" name="newsRelease" class="tall"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- Notes & Recap -->
+    <section class="card">
+      <h2>Notes &amp; Recap</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="raffleWinner">Raffle winner</label>
+          <input type="text" id="raffleWinner" name="raffleWinner" />
+        </div>
+        <div class="field">
+          <label for="agencies">Agencies</label>
+          <input type="text" id="agencies" name="agencies" />
+        </div>
+        <div class="field full">
+          <label for="leadsNotes">Leads notes</label>
+          <textarea id="leadsNotes" name="leadsNotes" class="tall"></textarea>
+        </div>
+        <div class="field full">
+          <label for="customersNotes">Customers notes</label>
+          <textarea id="customersNotes" name="customersNotes" class="tall"></textarea>
+        </div>
+        <div class="field full">
+          <label for="showNotes">Show notes</label>
+          <textarea id="showNotes" name="showNotes" class="tall"></textarea>
+        </div>
+        <div class="field full">
+          <label for="showRecap">Show recap</label>
+          <textarea id="showRecap" name="showRecap" class="tall"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ratings -->
+    <section class="card">
+      <h2>Ratings</h2>
+      <div class="ratings">
+        <div class="rating-row">
+          <span class="lbl">Overall</span>
+          <div class="stars" data-target="overallRating" role="radiogroup" aria-label="Overall rating"></div>
+          <input type="hidden" name="overallRating" id="overallRating" value="0" />
+        </div>
+        <div class="rating-row">
+          <span class="lbl">Leads</span>
+          <div class="stars" data-target="leadsRating" role="radiogroup" aria-label="Leads rating"></div>
+          <input type="hidden" name="leadsRating" id="leadsRating" value="0" />
+        </div>
+        <div class="rating-row">
+          <span class="lbl">Customer contact</span>
+          <div class="stars" data-target="customerRating" role="radiogroup" aria-label="Customer contact rating"></div>
+          <input type="hidden" name="customerRating" id="customerRating" value="0" />
+        </div>
+        <div class="rating-row">
+          <span class="lbl">Recommend next year?</span>
+          <div class="recommend">
+            <label><input type="radio" name="recommend" value="Yes" /> Yes</label>
+            <label><input type="radio" name="recommend" value="No" /> No</label>
+            <label><input type="radio" name="recommend" value="Maybe" /> Maybe</label>
+          </div>
+        </div>
+      </div>
+      <p class="footnote">Ratings are 1-5. Click a star to set, click the same star again to clear.</p>
+    </section>
+
+  </form>
+</div>
+
+<!-- Hidden PDF stage -->
+<div id="pdf-stage" aria-hidden="true"></div>
+
+<script>
+(function(){
+  // Build star widgets
+  document.querySelectorAll('.stars').forEach(group => {
+    const target = group.dataset.target;
+    for(let i=1;i<=5;i++){
+      const s = document.createElement('span');
+      s.className = 'star';
+      s.textContent = '\u2605';
+      s.dataset.value = i;
+      s.setAttribute('role','radio');
+      s.setAttribute('aria-label', i + ' star' + (i>1?'s':''));
+      s.addEventListener('click', () => setRating(target, i));
+      group.appendChild(s);
+    }
+  });
+
+  function setRating(targetId, value){
+    const hidden = document.getElementById(targetId);
+    const current = parseInt(hidden.value,10) || 0;
+    const next = current === value ? 0 : value;
+    hidden.value = next;
+    const stars = document.querySelector('.stars[data-target="'+targetId+'"]').children;
+    for(let i=0;i<stars.length;i++){
+      stars[i].classList.toggle('on', (i+1) <= next);
+    }
+  }
+
+  function formatDate(d){
+    if(!d) return '';
+    const parts = d.split('-');
+    if(parts.length !== 3) return d;
+    return parts[1]+'/'+parts[2]+'/'+parts[0];
+  }
+  function dateRange(a,b){
+    if(a && b) return formatDate(a)+' - '+formatDate(b);
+    return formatDate(a) || formatDate(b) || '';
+  }
+  function money(v){
+    if(v===''||v==null) return '';
+    const n = Number(v); if(isNaN(n)) return v;
+    return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function stars(n){
+    n = parseInt(n,10)||0;
+    if(!n) return '<span style="color:#999">Not rated</span>';
+    return '<span class="stars-pdf">'+'\u2605'.repeat(n)+'<span style="color:#ddd">'+'\u2605'.repeat(5-n)+'</span></span> <span style="color:#666">('+n+'/5)</span>';
+  }
+  function esc(s){
+    return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+  function val(id){ const el = document.getElementById(id); return el ? el.value : ''; }
+  function radio(name){
+    const r = document.querySelector('input[name="'+name+'"]:checked');
+    return r ? r.value : '';
+  }
+  function row(k,v){
+    return '<tr><td class="k">'+esc(k)+'</td><td class="v">'+(v||'<span style="color:#999">-</span>')+'</td></tr>';
+  }
+
+  function buildPdfHtml(){
+    const conf = esc(val('conferenceName')) || 'Untitled Conference';
+    const dates = esc(dateRange(val('startDate'), val('endDate')));
+    const today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+
+    return `
+      <h1>Post-Show Summary Report</h1>
+      <div class="sub">${conf}${dates?' &middot; '+dates:''} &middot; Generated ${today}</div>
+
+      <h2>Conference Details</h2>
+      <table>
+        ${row('Conference name', esc(val('conferenceName')))}
+        ${row('Dates', dates)}
+        ${row('Location', esc(val('location')))}
+        ${row('Staff attending', esc(val('staffAttending')))}
+        ${row('Conference website', esc(val('website')))}
+        ${row('Show cost', esc(money(val('showCost'))))}
+      </table>
+
+      <h2>Show Details</h2>
+      <table>
+        ${row('Number of leads', esc(val('numLeads')))}
+        ${row('Number of customers', esc(val('numCustomers')))}
+        ${row('Approximate booth visitors', esc(val('boothVisitors')))}
+        ${row('Demos completed', esc(val('demosCompleted')))}
+        ${row('Competitors that attended', esc(val('competitors')))}
+        ${row('Main product interest', esc(val('mainProductInterest')))}
+        ${row('Competitive issues / industry rumors', esc(val('competitiveIssues')))}
+        ${row('Condition of booth/graphics/supplies', esc(val('boothCondition')))}
+      </table>
+
+      <h2>Marketing</h2>
+      <table>
+        ${row('News release information', esc(val('newsRelease')))}
+      </table>
+
+      <h2>Notes</h2>
+      <table>
+        ${row('Raffle winner', esc(val('raffleWinner')))}
+        ${row('Agencies', esc(val('agencies')))}
+        ${row('Leads notes', esc(val('leadsNotes')))}
+        ${row('Customers notes', esc(val('customersNotes')))}
+        ${row('Show notes', esc(val('showNotes')))}
+        ${row('Show recap', esc(val('showRecap')))}
+      </table>
+
+      <h2>Ratings</h2>
+      <table>
+        ${row('Overall rating', stars(val('overallRating')))}
+        ${row('Leads rating', stars(val('leadsRating')))}
+        ${row('Customer contact rating', stars(val('customerRating')))}
+        ${row('Recommend attending next year', esc(radio('recommend')))}
+      </table>
+    `;
+  }
+
+  document.getElementById('pdfBtn').addEventListener('click', async () => {
+    const stage = document.getElementById('pdf-stage');
+    stage.innerHTML = buildPdfHtml();
+    const confName = (val('conferenceName')||'Post-Show-Summary').trim().replace(/[^a-z0-9-_ ]/gi,'').replace(/\s+/g,'-');
+    const filename = confName + '.pdf';
+
+    const opts = {
+      margin:[12,12,14,12],
+      filename,
+      image:{type:'jpeg',quality:0.98},
+      html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},
+      jsPDF:{unit:'mm',format:'letter',orientation:'portrait'},
+      pagebreak:{mode:['css','legacy']}
+    };
+
+    const btn = document.getElementById('pdfBtn');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Building PDF...';
+
+    // Cover the stage with a full-screen overlay so the flash is invisible to the user
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(247,246,242,0.92);z-index:9998;display:flex;align-items:center;justify-content:center;font:600 16px Inter,sans-serif;color:#01696F';
+    overlay.textContent = 'Building PDF...';
+    document.body.appendChild(overlay);
+
+    // Temporarily make the stage capturable. html2canvas needs the element to have a real
+    // flow-based height — position:fixed reports 0 to its clone-doc renderer. We switch to
+    // static positioning during capture (overlay hides the flash from the user).
+    const prevStyle = stage.getAttribute('style') || '';
+    stage.style.cssText = 'width:720px;background:#fff;color:#111;padding:32px;font-family:Inter,Arial,sans-serif;font-size:12px;line-height:1.5;position:static;opacity:1';
+    window.scrollTo(0,0);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    try {
+      await html2pdf().set(opts).from(stage).save();
+    } catch(e){
+      alert('Sorry, the PDF export failed. ' + e.message);
+    } finally {
+      stage.setAttribute('style', prevStyle);
+      overlay.remove();
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    if(!confirm('Clear all fields?')) return;
+    document.getElementById('reportForm').reset();
+    document.querySelectorAll('input[type=hidden]').forEach(h => h.value = '0');
+    document.querySelectorAll('.star.on').forEach(s => s.classList.remove('on'));
+  });
+})();
+</script>
+</body>
+</html>
